@@ -1,6 +1,7 @@
 {
   "name": "jumprope-prototype",
   "private": true,
+  "license": "MIT",
   "scripts": {
     "build:web": "esbuild web/app.js --bundle --minify --outfile=src/Jumprope.Server/wwwroot/app.js && npm run build:openapi",
     "build:openapi": "node scripts/build-openapi.mjs",
