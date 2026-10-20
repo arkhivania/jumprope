@@ -49,6 +49,7 @@ All session updates replace the complete view. Replacing a view or closing its s
       "rowSpan": 1,
       "columnSpan": 1,
       "contentType": "application/wasm",
+      "interactive": true,
       "dataBase64": "<base64-encoded WASM binary>"
     }
   ]
@@ -57,7 +58,9 @@ All session updates replace the complete view. Replacing a view or closing its s
 
 Images use `type: "image"`, an allowed image content type (`image/png`, `image/jpeg`, `image/gif`, or `image/webp`), and base64-encoded `dataBase64`. Markdown uses `text`. WASM modules are limited to 4 MB; images to 8 MB; a view can contain up to 128 elements on a grid up to 32 by 32. Row and column indices are zero-based, grid cells are equally sized, and elements may span multiple cells.
 
-The response includes a generated `interactionId` on each WASM element. The browser receives view changes through SignalR at `/hubs/sessions`.
+For static SVG artwork, prefer inline `<svg>` markup in a Markdown element; do not use WASM just to display a picture. The Markdown renderer sanitizes the SVG. If a drawing cannot be safely represented with sanitized SVG, render it to PNG and send it as an image. Use WASM when the artwork needs interactive behavior or must return a result.
+
+WASM elements are interactive by default. Set `"interactive": true` to receive a generated `interactionId`; the browser receives view changes through SignalR at `/hubs/sessions`. Set `"interactive": false` for display-only WASM: it gets no interaction ID, needs only the `memory`, `ui_ptr()`, and `ui_len()` exports, and the agent returns immediately without waiting for a result.
 
 ### Wait for and submit an interaction result
 
@@ -71,7 +74,7 @@ WASM does not access the DOM. Each module returns a JSON tree, the Web UI render
 
 The tree supports `row`, `column`, `text`, `checkbox`, `button`, and SVG elements (`svg`, `g`, `rect`, `circle`, `ellipse`, `line`, `path`, `svgText`). Interactive nodes have stable IDs. A button can contain SVG children, so a card can be an SVG image inside a button. SVG accepts only allow-listed numeric geometry, path data, view boxes, text anchors, and simple `fill`/`stroke` colors—never arbitrary attributes, CSS, external URLs, or event handlers. The module owns state and completion: after each event it can return an updated UI tree, and when its `is_complete()` export reports completion, the host submits the module's JSON result through the existing interaction endpoint.
 
-The module must have **no WASM imports** and export `memory`, `ui_ptr()`, `ui_len()`, `alloc(length)`, `handle_event(eventPtr, eventLen)`, `is_complete()`, `result_ptr()`, and `result_len()`. `ui_ptr`/`ui_len` expose the current UTF-8 JSON tree; `handle_event` processes a host event such as `{"type":"click","target":"ace"}` or `{"type":"change","target":"confirm","checked":true}`. The browser validates the tree and renders it without accepting arbitrary HTML, JavaScript, CSS, SVG attributes, or event handlers.
+For interactive WASM, the module must have **no WASM imports** and export `memory`, `ui_ptr()`, `ui_len()`, `alloc(length)`, `handle_event(eventPtr, eventLen)`, `is_complete()`, `result_ptr()`, and `result_len()`. `ui_ptr`/`ui_len` expose the current UTF-8 JSON tree; `handle_event` processes a host event such as `{"type":"click","target":"ace"}` or `{"type":"change","target":"confirm","checked":true}`. For `"interactive": false`, only `memory`, `ui_ptr()`, and `ui_len()` are required; the host displays the initial tree without events or a result. The browser validates the tree and renders it without accepting arbitrary HTML, JavaScript, CSS, SVG attributes, or event handlers.
 
 ## Checks
 

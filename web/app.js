@@ -149,7 +149,7 @@ function renderSession(session) {
       renderImage(item, element);
     } else if (element.type === "wasm") {
       const interaction = interactions.get(element.interactionId);
-      if (interaction && interaction.status !== "pending") {
+      if (element.interactive !== false && interaction && interaction.status !== "pending") {
         renderInteractionStatus(item, interaction);
       } else {
         renderWasmTask(item, element);
@@ -199,12 +199,12 @@ function renderImage(container, element) {
 
 function renderWasmTask(container, element) {
   const title = document.createElement("h3");
-  title.textContent = "Loading interactive task…";
+  title.textContent = element.interactive === false ? "Loading WASM content…" : "Loading interactive task…";
   const tree = document.createElement("div");
   tree.className = "wasm-ui-tree";
   const status = document.createElement("p");
   status.className = "item-status";
-  status.textContent = "Starting the WASM UI module.";
+  status.textContent = "Starting the WASM module.";
   container.classList.add("wasm-task");
   container.append(title, tree, status);
 
@@ -232,6 +232,7 @@ async function closeSession(sessionId) {
 class WasmTask {
   constructor(element, container, title, status) {
     this.element = element;
+    this.interactive = element.interactive !== false;
     this.container = container;
     this.title = title;
     this.status = status;
@@ -242,7 +243,7 @@ class WasmTask {
   }
 
   async start() {
-    if (!this.element.interactionId) {
+    if (this.interactive && !this.element.interactionId) {
       throw new Error("WASM element has no interaction ID.");
     }
 
@@ -251,7 +252,7 @@ class WasmTask {
     this.worker.onmessage = (event) => this.handleWorkerMessage(event.data);
     this.worker.onerror = () => this.fail("The WASM worker failed.");
     this.timer = setTimeout(() => this.fail("The WASM task exceeded its 5-second execution limit."), 5000);
-    this.worker.postMessage({ type: "init", bytes }, [bytes.buffer]);
+    this.worker.postMessage({ type: "init", bytes, interactive: this.interactive }, [bytes.buffer]);
   }
 
   handleWorkerMessage(message) {
@@ -262,7 +263,10 @@ class WasmTask {
         this.ui = nextUi;
         this.renderUi();
       }
-      this.status.textContent = "Interact with the WASM UI.";
+      this.status.textContent = this.interactive ? "Interact with the WASM UI." : "Display-only WASM content.";
+      if (!this.interactive) {
+        this.stopWorker();
+      }
       return;
     }
 
@@ -280,7 +284,7 @@ class WasmTask {
   renderUi() {
     this.title.textContent = this.ui.title;
     const focusedId = document.activeElement?.dataset?.nodeId;
-    const tree = renderUiNode(this.ui.root, (uiEvent) => this.dispatchUiEvent(uiEvent));
+    const tree = renderUiNode(this.ui.root, (uiEvent) => this.dispatchUiEvent(uiEvent), this.interactive);
     this.container.querySelector(".wasm-ui-tree")?.replaceChildren(tree);
     const focusTarget = focusedId && [...this.container.querySelectorAll("[data-node-id]")]
       .find((node) => node.dataset.nodeId === focusedId);
@@ -288,7 +292,7 @@ class WasmTask {
   }
 
   dispatchUiEvent(uiEvent) {
-    if (this.completed || !this.worker) {
+    if (!this.interactive || this.completed || !this.worker) {
       return;
     }
     clearTimeout(this.timer);
@@ -463,11 +467,11 @@ function validateUi(ui) {
   return ui;
 }
 
-function renderUiNode(node, dispatch) {
+function renderUiNode(node, dispatch, interactive = true) {
   if (node.type === "row" || node.type === "column") {
     const element = document.createElement("div");
     element.className = `wasm-layout wasm-${node.type}`;
-    element.append(...node.children.map((child) => renderUiNode(child, dispatch)));
+    element.append(...node.children.map((child) => renderUiNode(child, dispatch, interactive)));
     return element;
   }
   if (node.type === "text") {
@@ -482,8 +486,11 @@ function renderUiNode(node, dispatch) {
     const input = document.createElement("input");
     input.type = "checkbox";
     input.checked = node.checked;
+    input.disabled = !interactive;
     input.dataset.nodeId = node.id;
-    input.addEventListener("change", () => dispatch({ type: "change", target: node.id, checked: input.checked }));
+    if (interactive) {
+      input.addEventListener("change", () => dispatch({ type: "change", target: node.id, checked: input.checked }));
+    }
     const text = document.createElement("span");
     text.textContent = node.label;
     label.append(input, text);
@@ -493,7 +500,7 @@ function renderUiNode(node, dispatch) {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "wasm-button";
-    button.disabled = node.disabled ?? false;
+    button.disabled = (node.disabled ?? false) || !interactive;
     button.dataset.nodeId = node.id;
     button.setAttribute("aria-label", node.label);
     if (node.selected !== undefined) {
@@ -502,10 +509,12 @@ function renderUiNode(node, dispatch) {
     if (node.children.length === 0) {
       button.textContent = node.label;
     } else {
-      button.append(...node.children.map((child) => renderUiNode(child, dispatch)));
+      button.append(...node.children.map((child) => renderUiNode(child, dispatch, interactive)));
     }
-    button.addEventListener("click", () => dispatch({ type: "click", target: node.id }));
-    if (node.hover) {
+    if (interactive) {
+      button.addEventListener("click", () => dispatch({ type: "click", target: node.id }));
+    }
+    if (interactive && node.hover) {
       button.addEventListener("pointerenter", () => dispatch({ type: "pointerenter", target: node.id }));
       button.addEventListener("pointerleave", () => dispatch({ type: "pointerleave", target: node.id }));
     }
@@ -532,7 +541,7 @@ function renderUiNode(node, dispatch) {
   if (node.anchor !== undefined) element.setAttribute("text-anchor", node.anchor);
   if (node.type === "path") element.setAttribute("d", node.d);
   if (node.type === "svgText") element.textContent = node.value;
-  if (node.children) element.append(...node.children.map((child) => renderUiNode(child, dispatch)));
+  if (node.children) element.append(...node.children.map((child) => renderUiNode(child, dispatch, interactive)));
   return element;
 }
 

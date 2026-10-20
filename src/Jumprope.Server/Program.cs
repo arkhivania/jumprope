@@ -207,6 +207,10 @@ static string? ValidateView(ViewInput? input)
         switch (element.Type)
         {
             case "markdown":
+                if (element.Interactive is not null)
+                {
+                    return $"Markdown element '{element.Id}' cannot set the interactive property.";
+                }
                 if (element.Text is null || element.Text.Length > 1_000_000 ||
                     element.DataBase64 is not null || element.ContentType is not null)
                 {
@@ -214,6 +218,10 @@ static string? ValidateView(ViewInput? input)
                 }
                 break;
             case "image":
+                if (element.Interactive is not null)
+                {
+                    return $"Image element '{element.Id}' cannot set the interactive property.";
+                }
                 var imageError = ValidateBinaryElement(element, 8 * 1024 * 1024);
                 if (imageError is not null)
                 {

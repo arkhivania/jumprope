@@ -32,7 +32,7 @@ The user can close a session tab. Closing a session removes the tab and deletes 
 
 An interactive request contains a unique ID and a WASM module, delivered to the browser as bytes.
 
-Rendering agent-provided WASM is the Web UI application's responsibility. The application supports modules that implement the Jumprope event-driven UI ABI; arbitrary WASM binaries are not expected to render themselves. The module exports a JSON UI tree, receives host events such as button clicks and checkbox changes, and returns an updated tree after each event. The module also signals when it has completed and exposes the final JSON result.
+Rendering agent-provided WASM is the Web UI application's responsibility. WASM elements have an `interactive` property, defaulting to `true` for compatibility. Interactive modules implement the Jumprope event-driven UI ABI: they export a JSON UI tree, receive host events such as button clicks and checkbox changes, return updated trees, signal completion, and expose a final JSON result. Display-only modules set `interactive: false`; they only export an initial UI tree, have no interaction ID/result record, and do not block the agent waiting for a response.
 
 The host renders a limited, declarative node vocabulary: row/column layout, text, checkboxes, buttons, and a restricted set of SVG primitives. The module owns interaction state, validation, and completion flow. The browser creates the DOM/SVG using an allow-list rather than accepting arbitrary HTML, JavaScript, CSS, or SVG event handlers. Buttons support click activation, checkboxes support value changes, and opt-in button hover can emit pointer enter/leave events; raw high-frequency pointer movement is not currently exposed. The storage/HTTP service treats WASM as opaque bytes; adding or changing UI primitives does not require service-side endpoint or persistence changes. `wasm_interop.md` is the detailed companion reference and should describe implemented capabilities separately from future ideas; test-only ABI fixtures stay under `tests/fixtures/`, not in the product content.
 
@@ -76,6 +76,7 @@ Ordinary content, such as images and Markdown, can be displayed without interact
 - The agent uses long polling to wait until an interaction completes or is cancelled; results are returned as JSON over HTTP.
 - The prototype assumes one trusted user on a local or private setup. The HTTP service does not require agent authentication. Active sessions and their content are restored from the filesystem when the service restarts. Pending interactions are restored as pending; the UI can continue them and the agent reconnects its long-poll request.
 - The UI ABI is deliberately separate from the HTTP/storage API; adding a renderer node or event does not require a server feature.
+- A WASM element explicitly selects `interactive: true` (default) or `interactive: false`; display-only WASM must not create pending interactions or hold the agent waiting for a result.
 - `/openapi.json` embeds the current agent skill, which agents must refresh at the start of each task. `/wasm_interop.md` documents the current WASM ABI and browser-host capabilities and is fetched when a task involves WASM.
 - The exact endpoint formats and layout element schema will be documented and refined during API design and prototyping.
 

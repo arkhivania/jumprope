@@ -101,7 +101,10 @@ public sealed class SessionStore
                 Text = element.Text,
                 DataBase64 = element.DataBase64,
                 ContentType = element.ContentType,
-                InteractionId = element.Type == "wasm" ? Guid.NewGuid().ToString("N") : null
+                Interactive = element.Type == "wasm" ? element.Interactive ?? true : null,
+                InteractionId = element.Type == "wasm" && (element.Interactive ?? true)
+                    ? Guid.NewGuid().ToString("N")
+                    : null
             }).ToList();
 
             var newInteractions = elements

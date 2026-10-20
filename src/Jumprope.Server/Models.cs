@@ -16,7 +16,8 @@ public sealed record ElementInput(
     int ColumnSpan,
     string? Text = null,
     string? DataBase64 = null,
-    string? ContentType = null);
+    string? ContentType = null,
+    bool? Interactive = null);
 
 public sealed class StoredSession
 {
@@ -39,6 +40,7 @@ public sealed class StoredElement
     public string? Text { get; set; }
     public string? DataBase64 { get; set; }
     public string? ContentType { get; set; }
+    public bool? Interactive { get; set; }
     public string? InteractionId { get; set; }
 }
 

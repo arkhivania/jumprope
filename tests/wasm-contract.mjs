@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
+import { runInNewContext } from "node:vm";
 
 const bytes = await readFile(new URL("./fixtures/event-driven-ui.wasm", import.meta.url));
 const module = await WebAssembly.compile(bytes);
@@ -56,3 +57,39 @@ assert.equal(wasm.is_complete(), 1);
 assert.deepEqual(readJson(wasm.result_ptr(), wasm.result_len()), { selectedCard: "king-hearts" });
 
 console.log("Event-driven WASM UI fixture contract passed.");
+
+const displayBytes = await readFile(new URL("./fixtures/display-only.wasm", import.meta.url));
+const displayModule = await WebAssembly.compile(displayBytes);
+assert.deepEqual(WebAssembly.Module.imports(displayModule), [], "display-only WASM must not import host capabilities");
+const displayExports = WebAssembly.Module.exports(displayModule).map((entry) => entry.name);
+for (const name of ["memory", "ui_len", "ui_ptr"]) {
+  assert.ok(displayExports.includes(name), `display-only module is missing ${name}`);
+}
+for (const name of ["alloc", "handle_event", "is_complete", "result_ptr", "result_len"]) {
+  assert.ok(!displayExports.includes(name), `display-only module should not need ${name}`);
+}
+const displayInstance = await WebAssembly.instantiate(displayModule, {});
+const displayWasm = displayInstance.exports;
+const displayUi = JSON.parse(new TextDecoder().decode(
+  new Uint8Array(displayWasm.memory.buffer, displayWasm.ui_ptr(), displayWasm.ui_len())
+));
+assert.equal(displayUi.root.children[0].value, "This fixture only displays content.");
+
+const workerSource = await readFile(new URL("../src/Jumprope.Server/wwwroot/wasm-worker.js", import.meta.url), "utf8");
+const workerMessages = [];
+const workerSelf = { postMessage: (message) => workerMessages.push(message) };
+const workerContext = {
+  self: workerSelf,
+  WebAssembly,
+  TextEncoder,
+  TextDecoder,
+  Uint8Array,
+  JSON,
+  Error
+};
+runInNewContext(workerSource, workerContext);
+await workerSelf.onmessage({ data: { type: "init", bytes: displayBytes, interactive: false } });
+assert.equal(workerMessages[0].type, "ready");
+assert.equal(workerMessages[0].ui.title, "Static WASM UI");
+
+console.log("Display-only WASM contract passed.");

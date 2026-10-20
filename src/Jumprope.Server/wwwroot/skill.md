@@ -13,7 +13,7 @@ Whenever the task involves creating, compiling, inspecting, or changing a WASM U
 The agent communicates with Jumprope using ordinary HTTP requests only. No WebSocket, SignalR client, streaming connection, or long-lived agent connection is required. The browser UI uses SignalR internally to receive updates; that is an implementation detail of the UI, not part of the agent protocol.
 
 1. Send or replace a session view with `PUT /api/sessions/{sessionId}/view`.
-2. Read the returned `interactionId` for every WASM element.
+2. For each WASM element with `interactive: true` (or with `interactive` omitted), read the returned `interactionId`.
 3. For an interaction, wait using `GET /api/interactions/{interactionId}/result`. This HTTP request stays open until completion or cancellation. Reconnect with another GET if the connection is interrupted.
 4. The browser UI posts the result or a failure to the service. The agent does not need to submit the browser's result itself.
 
@@ -47,6 +47,7 @@ Send JSON to `PUT /api/sessions/{sessionId}/view` with `Content-Type: applicatio
       "rowSpan": 1,
       "columnSpan": 1,
       "contentType": "application/wasm",
+      "interactive": true,
       "dataBase64": "<base64-encoded WASM binary>"
     }
   ]
@@ -67,9 +68,15 @@ Every update replaces the entire visible view for that session. Pending interact
 
 - **Markdown** — use `type: "markdown"` and a `text` string up to 1 MB. Markdown is rendered with unsafe HTML sanitized.
 - **Image** — use `type: "image"`, `dataBase64`, and `contentType`. Accepted types are `image/png`, `image/jpeg`, `image/gif`, and `image/webp`. Decoded image data is limited to 8 MB.
-- **WASM** — use `type: "wasm"`, base64-encoded WebAssembly bytes, and `contentType: "application/wasm"`. A module is limited to 4 MB and must implement the event-driven Jumprope UI ABI below.
+- **WASM** — use `type: "wasm"`, base64-encoded WebAssembly bytes, and `contentType: "application/wasm"`. A module is limited to 4 MB. Set `interactive: true` when it accepts user events and returns a result. Set `interactive: false` when it only displays content: the service creates no interaction ID and the agent must not wait for a result. If omitted, `interactive` defaults to `true` for backwards compatibility.
 
-The service returns the session view as JSON. Each WASM element has a generated `interactionId`; retain it to wait for that task's result.
+For interactive WASM, the service returns a generated `interactionId`; retain it to wait for that task's result. For display-only WASM, the response has no interaction ID and the task continues immediately after the view is published.
+
+### Displaying SVG artwork
+
+If the user asks only to draw, create, or show an SVG, treat it as **static artwork**: send it as inline `<svg>...</svg>` markup inside a Markdown element. Do not compile or wrap it in WASM just to display it. The Markdown renderer sanitizes inline SVG; use ordinary SVG drawing elements and attributes such as `viewBox`, `rect`, `circle`, `ellipse`, `line`, `path`, `polygon`, `polyline`, `text`, `fill`, and `stroke`. Do not include scripts, event-handler attributes, styles, or external resources. If the artwork cannot be represented safely as sanitized inline SVG, rasterize it to PNG and send it as an image.
+
+Use WASM only when the user asks for interaction or behavior that needs code/state, such as selecting cards, responding to button clicks or checkbox changes, changing the SVG in response to events, or returning a structured result. Even then, prefer the simplest solution that satisfies the request.
 
 ## Jumprope event-driven UI ABI
 
@@ -85,6 +92,8 @@ The module must have **no WASM imports** and export:
 - `result_ptr() -> i32`, `result_len() -> i32` — pointer and byte length of the final UTF-8 JSON result.
 
 The host reads the initial tree, renders it, and after each event calls `handle_event` and reads the updated tree. When `is_complete()` becomes nonzero, the host reads the result and posts it to the existing interaction endpoint. The module defines its own confirmation flow; there is no built-in form or host-owned submit button.
+
+For `interactive: false`, the module only needs to export `memory`, `ui_ptr()`, and `ui_len()`; the host renders the initial tree, disables controls, stops the worker, and does not create or wait for an interaction result. Use this mode for WASM that only presents a visualization. If no WASM behavior is needed at all, prefer Markdown/SVG or an image instead.
 
 A UI tree has `version: 1`, a `title`, and a `root` node:
 

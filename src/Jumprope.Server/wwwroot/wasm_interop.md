@@ -1,6 +1,6 @@
 # Jumprope WASM UI Interop Reference
 
-This document describes how a Jumprope WebAssembly module constructs an interactive UI and communicates with its browser host. Refresh it from `GET /wasm_interop.md` before creating or changing a WASM interaction. Also refresh `GET /openapi.json` and follow the current `info.x-agent-skill`; older local copies may not match the running service.
+This document describes how a Jumprope WebAssembly module constructs a display-only or interactive UI and communicates with its browser host. Refresh it from `GET /wasm_interop.md` before creating or changing a WASM interaction. Also refresh `GET /openapi.json` and follow the current `info.x-agent-skill`; older local copies may not match the running service.
 
 The HTTP service stores and forwards WASM as opaque bytes. It does not interpret the tree or event payloads. The Web UI is the ABI host; adding a node or event requires a host/runtime change, but no service endpoint or storage change.
 
@@ -20,6 +20,15 @@ The module must have no WASM imports and export:
 | `result_len` | `() -> i32` | Byte length of the result |
 
 At startup, the host reads and renders the tree. For each user event, it writes UTF-8 JSON into memory returned by `alloc`, calls `handle_event`, then checks `is_complete`. If incomplete, the host reads and renders the new tree. If complete, it reads the JSON result and submits it to the existing interaction-result endpoint.
+
+## Display-only mode
+
+Each `type: "wasm"` view element has an optional `interactive` boolean. It defaults to `true` for backwards compatibility.
+
+- `interactive: true` (or omitted): the service creates an interaction ID; the module implements the full event/result ABI above; the agent may long-poll for the result.
+- `interactive: false`: the service creates no interaction ID or pending interaction record. The module needs only `memory`, `ui_ptr`, and `ui_len`, with no `alloc`, event handler, completion flag, or result exports. The host reads and renders the initial UI tree, disables any controls it contains, terminates the worker, and submits no result. The agent should return immediately after publishing the view and must not start a result long poll.
+
+Use display-only mode for a WASM visualization that has no user-driven behavior and returns no result. For static artwork that does not need WASM execution, prefer the simpler Markdown/SVG or image content type.
 
 The host limits a UI tree to 64 KB, 512 nodes, and depth 24. Events and results are each limited to 64 KB. A WASM module is limited to 4 MB and a host call is subject to the five-second execution timeout.
 

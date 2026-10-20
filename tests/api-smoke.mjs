@@ -10,8 +10,10 @@ import { HubConnectionBuilder, LogLevel } from "@microsoft/signalr";
 const projectDirectory = new URL("../src/Jumprope.Server/", import.meta.url).pathname;
 const dllPath = join(projectDirectory, "bin/Debug/net10.0/Jumprope.Server.dll");
 const wasm = (await readFile(new URL("./fixtures/event-driven-ui.wasm", import.meta.url))).toString("base64");
+const displayWasm = (await readFile(new URL("./fixtures/display-only.wasm", import.meta.url))).toString("base64");
 const sessionId = `smoke_${crypto.randomUUID().replaceAll("-", "")}`;
 const persistedSessionId = `${sessionId}_restart`;
+const displaySessionId = `${sessionId}_display`;
 const dotnetCandidate = process.env.DOTNET_CLI_PATH ?? join(homedir(), ".dotnet/dotnet");
 let server;
 let baseUrl;
@@ -46,6 +48,7 @@ try {
   assert.ok(openApi.paths["/api/sessions/{sessionId}/view"]);
   assert.ok(openApi.paths["/api/interactions/{interactionId}/result"]);
   assert.ok(openApi.paths["/wasm_interop.md"]);
+  assert.equal(openApi.components.schemas.ElementInput.properties.interactive.default, true);
   assert.equal(wasmInteropResponse.status, 200);
   assert.equal(await wasmInteropResponse.text(), wasmInteropSource);
   await connectHub();
@@ -61,6 +64,18 @@ try {
     }] })
   });
   assert.equal(invalidLayout.status, 400);
+
+  const invalidInteractiveImage = await fetch(`${baseUrl}/api/sessions/${sessionId}/view`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      rowsCount: 1, columnsCount: 1, elements: [{
+        id: "image", type: "image", row: 0, column: 0, rowSpan: 1, columnSpan: 1,
+        contentType: "image/png", dataBase64: "AA==", interactive: false
+      }]
+    })
+  });
+  assert.equal(invalidInteractiveImage.status, 400);
 
   const invalidWasm = await fetch(`${baseUrl}/api/sessions/${sessionId}/view`, {
     method: "PUT",
@@ -105,7 +120,24 @@ try {
   await sessionUpdated;
   const firstInteractionId = savedView.elements.find((element) => element.id === "picker").interactionId;
   assert.ok(firstInteractionId);
+  assert.equal(savedView.elements.find((element) => element.id === "picker").interactive, true);
   assert.equal((await fetch(`${baseUrl}/api/sessions/${sessionId}`)).status, 200);
+
+  const displayResponse = await fetch(`${baseUrl}/api/sessions/${displaySessionId}/view`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      rowsCount: 1, columnsCount: 1, elements: [{
+        id: "display", type: "wasm", row: 0, column: 0, rowSpan: 1, columnSpan: 1,
+        contentType: "application/wasm", dataBase64: displayWasm, interactive: false
+      }]
+    })
+  });
+  assert.equal(displayResponse.status, 200);
+  const displayView = await displayResponse.json();
+  assert.equal(displayView.elements[0].interactive, false);
+  assert.equal(displayView.elements[0].interactionId, null);
+  assert.equal(displayView.interactions.length, 0);
 
   const waitingForResult = fetch(`${baseUrl}/api/interactions/${firstInteractionId}/result`);
   response = await fetch(`${baseUrl}/api/interactions/${firstInteractionId}/result`, {
@@ -247,11 +279,11 @@ try {
   const deletion = await fetch(`${baseUrl}/api/sessions/${persistedSessionId}`, { method: "DELETE" });
   assert.equal(deletion.status, 204);
 
-  console.log("API smoke tests passed: validation, content, long polling, cancellation, persistence, and deletion.");
+  console.log("API smoke tests passed: validation, display-only and interactive WASM, long polling, cancellation, persistence, and deletion.");
 } finally {
   await hub?.stop();
   if (baseUrl) {
-    for (const id of [sessionId, persistedSessionId]) {
+    for (const id of [sessionId, persistedSessionId, displaySessionId]) {
       await fetch(`${baseUrl}/api/sessions/${id}`, { method: "DELETE" }).catch(() => {});
     }
   }
