@@ -1,0 +1,633 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Jumprope Agent HTTP API",
+    "version": "1.0.0",
+    "summary": "HTTP API for publishing session views and retrieving user interaction results.",
+    "description": "The full agent skill is embedded verbatim below and in the x-agent-skill extension.",
+    "x-agent-skill": ""
+  },
+  "servers": [
+    {
+      "url": "/",
+      "description": "Current Jumprope service origin"
+    }
+  ],
+  "paths": {
+    "/api/sessions": {
+      "get": {
+        "operationId": "listSessions",
+        "summary": "List active sessions",
+        "description": "Returns a summary of all open sessions. Use ordinary HTTP; agent clients do not need SignalR or WebSockets.",
+        "responses": {
+          "200": {
+            "description": "Active sessions.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SessionSummary"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/sessions/{sessionId}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/SessionId"
+        }
+      ],
+      "get": {
+        "operationId": "getSession",
+        "summary": "Get a session",
+        "description": "Returns its current grid view and interaction records.",
+        "responses": {
+          "200": {
+            "description": "The session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Session"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteSession",
+        "summary": "Close and delete a session",
+        "description": "Deletes the session and cancels its pending interactions. Waiting result requests receive status cancelled.",
+        "responses": {
+          "204": {
+            "description": "Session deleted."
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/sessions/{sessionId}/view": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/SessionId"
+        }
+      ],
+      "put": {
+        "operationId": "replaceSessionView",
+        "summary": "Replace a session view",
+        "description": "Replaces the complete view. Any pending interactions from the previous view are cancelled. WASM elements receive generated interaction IDs in the response.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ViewInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The stored view, including generated interaction IDs.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Session"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
+        }
+      }
+    },
+    "/api/interactions/{interactionId}/result": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/InteractionId"
+        }
+      ],
+      "get": {
+        "operationId": "waitForInteractionResult",
+        "summary": "Wait for an interaction result",
+        "description": "Long-polls over a normal HTTP request until the user completes or cancels the interaction. Reconnect using the same ID if the HTTP connection is interrupted.",
+        "responses": {
+          "200": {
+            "description": "The completed, cancelled, or failed interaction.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InteractionResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      },
+      "post": {
+        "operationId": "submitInteractionResult",
+        "summary": "Submit a completed interaction result",
+        "description": "Normally called by the browser UI, not by the agent. Results are limited to 64 KB.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": [
+                  "object",
+                  "array",
+                  "string",
+                  "number",
+                  "integer",
+                  "boolean",
+                  "null"
+                ],
+                "additionalProperties": true
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The completed interaction.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InteractionResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
+      }
+    },
+    "/api/interactions/{interactionId}/failure": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/InteractionId"
+        }
+      ],
+      "post": {
+        "operationId": "reportInteractionFailure",
+        "summary": "Report a failed interaction",
+        "description": "Normally called by the browser UI if the WASM module fails.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InteractionFailure"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The failed interaction.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InteractionResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
+      }
+    },
+    "/openapi.json": {
+      "get": {
+        "operationId": "getOpenApiDocument",
+        "summary": "Get this API description and embedded agent skill",
+        "responses": {
+          "200": {
+            "description": "OpenAPI 3.1 document with the complete skill in info.description and info.x-agent-skill.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/skill.md": {
+      "get": {
+        "operationId": "getAgentSkill",
+        "summary": "Get the agent skill as Markdown",
+        "responses": {
+          "200": {
+            "description": "Agent instructions for using the Jumprope HTTP API.",
+            "content": {
+              "text/markdown": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/wasm_interop.md": {
+      "get": {
+        "operationId": "getWasmInteropReference",
+        "summary": "Get the detailed WASM UI interoperability reference",
+        "responses": {
+          "200": {
+            "description": "Current WASM UI ABI, node, event, and safety reference.",
+            "content": {
+              "text/markdown": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "parameters": {
+      "SessionId": {
+        "name": "sessionId",
+        "in": "path",
+        "required": true,
+        "description": "1-80 letters, digits, underscores, or hyphens.",
+        "schema": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{1,80}$"
+        }
+      },
+      "InteractionId": {
+        "name": "interactionId",
+        "in": "path",
+        "required": true,
+        "description": "Interaction ID returned for a WASM element when replacing a session view.",
+        "schema": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{1,80}$"
+        }
+      }
+    },
+    "responses": {
+      "BadRequest": {
+        "description": "Invalid ID, body, grid layout, content, or request size.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ApiError"
+            }
+          }
+        }
+      },
+      "NotFound": {
+        "description": "The requested session or interaction does not exist."
+      },
+      "Conflict": {
+        "description": "The interaction does not exist or is no longer pending.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ApiError"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "ApiError": {
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "string"
+          }
+        }
+      },
+      "InteractionFailure": {
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096
+          }
+        }
+      },
+      "ElementInput": {
+        "type": "object",
+        "required": [
+          "id",
+          "type",
+          "row",
+          "column",
+          "rowSpan",
+          "columnSpan"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,80}$"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "markdown",
+              "image",
+              "wasm"
+            ]
+          },
+          "row": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "column": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "rowSpan": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "columnSpan": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 1000000,
+            "description": "Markdown text. Only valid for type markdown."
+          },
+          "dataBase64": {
+            "type": "string",
+            "contentEncoding": "base64",
+            "description": "Image data (up to 8 MB decoded) or WASM bytes (up to 4 MB decoded)."
+          },
+          "contentType": {
+            "type": "string",
+            "enum": [
+              "image/png",
+              "image/jpeg",
+              "image/gif",
+              "image/webp",
+              "application/wasm"
+            ]
+          },
+          "interactionId": {
+            "type": "string",
+            "readOnly": true,
+            "description": "Generated by the service for WASM elements."
+          }
+        }
+      },
+      "ViewInput": {
+        "type": "object",
+        "required": [
+          "rowsCount",
+          "columnsCount",
+          "elements"
+        ],
+        "properties": {
+          "rowsCount": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 32
+          },
+          "columnsCount": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 32
+          },
+          "elements": {
+            "type": "array",
+            "maxItems": 128,
+            "items": {
+              "$ref": "#/components/schemas/ElementInput"
+            }
+          }
+        }
+      },
+      "StoredElement": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ElementInput"
+          }
+        ]
+      },
+      "Interaction": {
+        "type": "object",
+        "required": [
+          "id",
+          "elementId",
+          "status",
+          "createdAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "elementId": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "completed",
+              "cancelled",
+              "failed"
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "completedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "result": {
+            "type": [
+              "object",
+              "array",
+              "string",
+              "number",
+              "integer",
+              "boolean",
+              "null"
+            ],
+            "description": "JSON result, or an error object for failed interactions."
+          }
+        }
+      },
+      "InteractionResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "status"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "completed",
+              "cancelled",
+              "failed"
+            ]
+          },
+          "result": {
+            "type": [
+              "object",
+              "array",
+              "string",
+              "number",
+              "integer",
+              "boolean",
+              "null"
+            ]
+          },
+          "completedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        }
+      },
+      "SessionSummaryElement": {
+        "type": "object",
+        "required": [
+          "id",
+          "type"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          },
+          "interactionId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "interactionStatus": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "SessionSummary": {
+        "type": "object",
+        "required": [
+          "sessionId",
+          "updatedAt",
+          "rowsCount",
+          "columnsCount",
+          "elements"
+        ],
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "rowsCount": {
+            "type": "integer"
+          },
+          "columnsCount": {
+            "type": "integer"
+          },
+          "elements": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SessionSummaryElement"
+            }
+          }
+        }
+      },
+      "Session": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/SessionSummary"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "elements": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/StoredElement"
+                }
+              },
+              "interactions": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Interaction"
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  }
+}

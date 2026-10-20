@@ -1,0 +1,633 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Jumprope Agent HTTP API",
+    "version": "1.0.0",
+    "summary": "HTTP API for publishing session views and retrieving user interaction results.",
+    "description": "# Jumprope Session UI Skill\n\nUse this skill when you need to show a user images, Markdown, or an interactive task in the Jumprope browser UI and retrieve the user's response.\n\n## Always refresh these instructions\n\nAt the start of **every Jumprope task**, fetch `GET /openapi.json` from the service origin you are about to use and follow the current `info.x-agent-skill` value. Do not rely on a previously cached or remembered copy of this skill: the server's OpenAPI document is the authoritative current version. If the OpenAPI document is temporarily unavailable or does not contain `info.x-agent-skill`, fetch `GET /skill.md` from that same origin and report the limitation if neither can be retrieved.\n\nWhenever the task involves creating, compiling, inspecting, or changing a WASM UI, also fetch `GET /wasm_interop.md` from that service origin and follow its current ABI, node, and event details. It is the detailed companion reference for the event-driven WASM interface.\n\n## Communication model\n\nThe agent communicates with Jumprope using ordinary HTTP requests only. No WebSocket, SignalR client, streaming connection, or long-lived agent connection is required. The browser UI uses SignalR internally to receive updates; that is an implementation detail of the UI, not part of the agent protocol.\n\n1. Send or replace a session view with `PUT /api/sessions/{sessionId}/view`.\n2. Read the returned `interactionId` for every WASM element.\n3. For an interaction, wait using `GET /api/interactions/{interactionId}/result`. This HTTP request stays open until completion or cancellation. Reconnect with another GET if the connection is interrupted.\n4. The browser UI posts the result or a failure to the service. The agent does not need to submit the browser's result itself.\n\nWhen the user expects the result in the current conversation, keep the task open while waiting for the long-poll response. Do not end the turn after publishing the view or merely starting a background poll. Give the user the UI URL/session tab before waiting, continue waiting for the interaction result, then interpret it and reply in the same conversation. A pending long poll is expected: it means the browser is still waiting for the user. If the interaction is cancelled or fails, report that status rather than presenting it as a successful result.\n\nThe service has no agent authentication in this prototype. Use it only in a trusted local or private environment. Do not expose the unauthenticated service to a public or untrusted network.\n\n## Sending a view\n\nSend JSON to `PUT /api/sessions/{sessionId}/view` with `Content-Type: application/json`:\n\n```json\n{\n  \"rowsCount\": 1,\n  \"columnsCount\": 2,\n  \"elements\": [\n    {\n      \"id\": \"instructions\",\n      \"type\": \"markdown\",\n      \"row\": 0,\n      \"column\": 0,\n      \"rowSpan\": 1,\n      \"columnSpan\": 1,\n      \"text\": \"# Choose three cards\\nSelect three of the seven cards.\"\n    },\n    {\n      \"id\": \"interactive-task\",\n      \"type\": \"wasm\",\n      \"row\": 0,\n      \"column\": 1,\n      \"rowSpan\": 1,\n      \"columnSpan\": 1,\n      \"contentType\": \"application/wasm\",\n      \"dataBase64\": \"<base64-encoded WASM binary>\"\n    }\n  ]\n}\n```\n\nEvery update replaces the entire visible view for that session. Pending interactions from the replaced view are cancelled, and agents waiting on them receive `status: \"cancelled\"`. A session tab is created when content for its `sessionId` arrives. Closing the tab deletes that session's stored data and cancels its pending interactions. Sending content with the same ID later creates a new session.\n\n### Grid layout\n\n- `rowsCount` and `columnsCount` must each be between 1 and 32.\n- Rows and columns divide the available space equally.\n- Row and column indices are zero-based: the upper-left cell is `(0, 0)`.\n- Each element is one content item. It specifies `row`, `column`, `rowSpan`, and `columnSpan` and must fit inside the grid.\n- A view can contain at most 128 elements. Element IDs must be unique within the view and contain 1-80 letters, digits, underscores, or hyphens.\n\n### Supported content types\n\n- **Markdown** — use `type: \"markdown\"` and a `text` string up to 1 MB. Markdown is rendered with unsafe HTML sanitized.\n- **Image** — use `type: \"image\"`, `dataBase64`, and `contentType`. Accepted types are `image/png`, `image/jpeg`, `image/gif`, and `image/webp`. Decoded image data is limited to 8 MB.\n- **WASM** — use `type: \"wasm\"`, base64-encoded WebAssembly bytes, and `contentType: \"application/wasm\"`. A module is limited to 4 MB and must implement the event-driven Jumprope UI ABI below.\n\nThe service returns the session view as JSON. Each WASM element has a generated `interactionId`; retain it to wait for that task's result.\n\n## Jumprope event-driven UI ABI\n\nWASM does not directly create or manipulate browser DOM. It returns a declarative UI tree; the browser host turns allow-listed nodes into DOM/SVG and sends user events back into the same module. The service treats the module as opaque bytes and does not know about UI node types or events. Adding a node type changes the browser runtime/ABI, not the HTTP service.\n\nThe module must have **no WASM imports** and export:\n\n- `memory`;\n- `ui_ptr() -> i32`, `ui_len() -> i32` — pointer and byte length of the current UTF-8 JSON UI tree;\n- `alloc(length: i32) -> i32` — pointer to writable memory for an event;\n- `handle_event(eventPtr: i32, eventLen: i32) -> void` — process one host event and update module state;\n- `is_complete() -> i32` — return nonzero when the interaction is complete;\n- `result_ptr() -> i32`, `result_len() -> i32` — pointer and byte length of the final UTF-8 JSON result.\n\nThe host reads the initial tree, renders it, and after each event calls `handle_event` and reads the updated tree. When `is_complete()` becomes nonzero, the host reads the result and posts it to the existing interaction endpoint. The module defines its own confirmation flow; there is no built-in form or host-owned submit button.\n\nA UI tree has `version: 1`, a `title`, and a `root` node:\n\n```json\n{\n  \"version\": 1,\n  \"title\": \"Choose one card\",\n  \"root\": {\n    \"type\": \"column\",\n    \"children\": [\n      { \"type\": \"text\", \"value\": \"Choose a card and confirm your selection.\" },\n      {\n        \"type\": \"row\",\n        \"children\": [\n          {\n            \"type\": \"button\",\n            \"id\": \"ace\",\n            \"label\": \"Ace of Spades\",\n            \"selected\": false,\n            \"hover\": true,\n            \"children\": [\n              {\n                \"type\": \"svg\",\n                \"viewBox\": \"0 0 100 140\",\n                \"children\": [\n                  { \"type\": \"rect\", \"x\": 2, \"y\": 2, \"width\": 96, \"height\": 136, \"rx\": 8, \"fill\": \"white\", \"stroke\": \"#333333\" },\n                  { \"type\": \"svgText\", \"x\": 50, \"y\": 75, \"fontSize\": 32, \"anchor\": \"middle\", \"value\": \"A\" }\n                ]\n              }\n            ]\n          }\n        ]\n      },\n      { \"type\": \"checkbox\", \"id\": \"confirm\", \"label\": \"I confirm\", \"checked\": false }\n    ]\n  }\n}\n```\n\nSupported nodes are `row`, `column`, `text`, `checkbox`, `button`, `svg`, `g`, `rect`, `circle`, `ellipse`, `line`, `path`, and `svgText`. Layout nodes group children; SVG nodes are only valid within an SVG subtree. Checkbox nodes have `id`, `label`, and `checked`. Buttons have `id`, accessible `label`, optional `selected`/`disabled`, optional `hover: true` to receive pointer enter/leave events, and child nodes. Use unique IDs on interactive nodes. Text is inserted as text, not interpreted as HTML. SVG is built element-by-element with allow-listed numeric geometry, path data, `viewBox`, text anchor, and simple color values for `fill`/`stroke`; scripts, arbitrary attributes, external URLs, CSS, and event handlers are not accepted.\n\nThe host sends events such as `{\"type\":\"click\",\"target\":\"ace\"}`, `{\"type\":\"change\",\"target\":\"confirm\",\"checked\":true}`, `{\"type\":\"pointerenter\",\"target\":\"ace\"}`, and `{\"type\":\"pointerleave\",\"target\":\"ace\"}`. Pointer enter/leave events are enabled on a button by setting `\"hover\": true`. After processing an event, return the current tree from `ui_ptr`/`ui_len`; this lets the module update selection state, labels, SVG attributes, or available controls. On completion return a JSON result such as `{\"selectedCard\":\"ace-spades\"}`. Raw/high-frequency mousemove events are not currently sent.\n\nFor the complete list of node properties, SVG primitives, and event payloads, retrieve `/wasm_interop.md`; do not assume an event or SVG feature is supported just because it exists in the browser platform.\n\n### WASM implementation recommendations\n\n- Use a WASM-targeting toolchain such as C/C++ with `wasm32-unknown-unknown` and no WASI.\n- Keep the module self-contained; do not import host functions or assume access to the DOM, network, filesystem, JavaScript, or WASI.\n- Validate event IDs and event values inside the module. The host's allow-list and size checks are not a substitute for validating module state.\n- Keep initialization and event handling fast. The host executes the module in a Web Worker and terminates a task that exceeds the five-second execution limit.\n\nThe current Web UI limits a tree to 64 KB, 512 nodes, and a depth of 24; a module is limited to 4 MB and an interaction result to 64 KB. Web Workers, the no-import rule, and these limits are not a complete security or memory sandbox. Treat agent-provided WASM as untrusted code.\n\n## Waiting for an interaction\n\nCall:\n\n```http\nGET /api/interactions/{interactionId}/result\n```\n\nThe request waits until the user completes the task or it is cancelled. A successful completion has the form:\n\n```json\n{\n  \"id\": \"interaction-id\",\n  \"status\": \"completed\",\n  \"result\": { \"selectedCards\": [\"ace-spades\", \"king-hearts\", \"queen-diamonds\"] },\n  \"completedAt\": \"2026-10-20T12:00:00+00:00\"\n}\n```\n\nOther terminal statuses are `cancelled` and `failed`. A failed interaction includes an error object in `result`. `404` means that the interaction ID does not exist. Results are limited to 64 KB. If the HTTP connection drops before a response arrives, repeat the GET with the same ID; a pending interaction remains pending across service restarts.\n\nIf the requested outcome is to show or interpret the user's choice in the conversation, do not treat a pending response as the final answer. Keep waiting in the current task and report the result only after the GET returns a terminal status.\n\n## Other HTTP endpoints\n\n- `GET /api/sessions` — list open sessions and summary information.\n- `GET /api/sessions/{sessionId}` — get a session's current view and interaction records.\n- `DELETE /api/sessions/{sessionId}` — close a session, delete its data, and cancel pending interactions.\n- `GET /openapi.json` — machine-readable API description. This OpenAPI document embeds this entire skill document as `info.description` and `x-agent-skill`.\n- `GET /skill.md` — this skill document as Markdown.\n- `GET /wasm_interop.md` — detailed, versioned reference for the WASM UI ABI, SVG node vocabulary, events, examples, and limits.\n\n## Errors and limits\n\nSession and interaction IDs must contain 1-80 letters, digits, underscores, or hyphens. The server rejects invalid content, grid positions outside the declared grid, unsupported content types, malformed base64, and oversized bodies with a `400` response. `409` on result submission means the interaction is missing or is no longer pending; `404` on session or interaction retrieval means it does not exist.\n\nThe service allows an HTTP request body up to 32 MB. Individual content and result limits above still apply. Calls use standard HTTP semantics and JSON; no authentication headers are expected in this single-user prototype.\n",
+    "x-agent-skill": "# Jumprope Session UI Skill\n\nUse this skill when you need to show a user images, Markdown, or an interactive task in the Jumprope browser UI and retrieve the user's response.\n\n## Always refresh these instructions\n\nAt the start of **every Jumprope task**, fetch `GET /openapi.json` from the service origin you are about to use and follow the current `info.x-agent-skill` value. Do not rely on a previously cached or remembered copy of this skill: the server's OpenAPI document is the authoritative current version. If the OpenAPI document is temporarily unavailable or does not contain `info.x-agent-skill`, fetch `GET /skill.md` from that same origin and report the limitation if neither can be retrieved.\n\nWhenever the task involves creating, compiling, inspecting, or changing a WASM UI, also fetch `GET /wasm_interop.md` from that service origin and follow its current ABI, node, and event details. It is the detailed companion reference for the event-driven WASM interface.\n\n## Communication model\n\nThe agent communicates with Jumprope using ordinary HTTP requests only. No WebSocket, SignalR client, streaming connection, or long-lived agent connection is required. The browser UI uses SignalR internally to receive updates; that is an implementation detail of the UI, not part of the agent protocol.\n\n1. Send or replace a session view with `PUT /api/sessions/{sessionId}/view`.\n2. Read the returned `interactionId` for every WASM element.\n3. For an interaction, wait using `GET /api/interactions/{interactionId}/result`. This HTTP request stays open until completion or cancellation. Reconnect with another GET if the connection is interrupted.\n4. The browser UI posts the result or a failure to the service. The agent does not need to submit the browser's result itself.\n\nWhen the user expects the result in the current conversation, keep the task open while waiting for the long-poll response. Do not end the turn after publishing the view or merely starting a background poll. Give the user the UI URL/session tab before waiting, continue waiting for the interaction result, then interpret it and reply in the same conversation. A pending long poll is expected: it means the browser is still waiting for the user. If the interaction is cancelled or fails, report that status rather than presenting it as a successful result.\n\nThe service has no agent authentication in this prototype. Use it only in a trusted local or private environment. Do not expose the unauthenticated service to a public or untrusted network.\n\n## Sending a view\n\nSend JSON to `PUT /api/sessions/{sessionId}/view` with `Content-Type: application/json`:\n\n```json\n{\n  \"rowsCount\": 1,\n  \"columnsCount\": 2,\n  \"elements\": [\n    {\n      \"id\": \"instructions\",\n      \"type\": \"markdown\",\n      \"row\": 0,\n      \"column\": 0,\n      \"rowSpan\": 1,\n      \"columnSpan\": 1,\n      \"text\": \"# Choose three cards\\nSelect three of the seven cards.\"\n    },\n    {\n      \"id\": \"interactive-task\",\n      \"type\": \"wasm\",\n      \"row\": 0,\n      \"column\": 1,\n      \"rowSpan\": 1,\n      \"columnSpan\": 1,\n      \"contentType\": \"application/wasm\",\n      \"dataBase64\": \"<base64-encoded WASM binary>\"\n    }\n  ]\n}\n```\n\nEvery update replaces the entire visible view for that session. Pending interactions from the replaced view are cancelled, and agents waiting on them receive `status: \"cancelled\"`. A session tab is created when content for its `sessionId` arrives. Closing the tab deletes that session's stored data and cancels its pending interactions. Sending content with the same ID later creates a new session.\n\n### Grid layout\n\n- `rowsCount` and `columnsCount` must each be between 1 and 32.\n- Rows and columns divide the available space equally.\n- Row and column indices are zero-based: the upper-left cell is `(0, 0)`.\n- Each element is one content item. It specifies `row`, `column`, `rowSpan`, and `columnSpan` and must fit inside the grid.\n- A view can contain at most 128 elements. Element IDs must be unique within the view and contain 1-80 letters, digits, underscores, or hyphens.\n\n### Supported content types\n\n- **Markdown** — use `type: \"markdown\"` and a `text` string up to 1 MB. Markdown is rendered with unsafe HTML sanitized.\n- **Image** — use `type: \"image\"`, `dataBase64`, and `contentType`. Accepted types are `image/png`, `image/jpeg`, `image/gif`, and `image/webp`. Decoded image data is limited to 8 MB.\n- **WASM** — use `type: \"wasm\"`, base64-encoded WebAssembly bytes, and `contentType: \"application/wasm\"`. A module is limited to 4 MB and must implement the event-driven Jumprope UI ABI below.\n\nThe service returns the session view as JSON. Each WASM element has a generated `interactionId`; retain it to wait for that task's result.\n\n## Jumprope event-driven UI ABI\n\nWASM does not directly create or manipulate browser DOM. It returns a declarative UI tree; the browser host turns allow-listed nodes into DOM/SVG and sends user events back into the same module. The service treats the module as opaque bytes and does not know about UI node types or events. Adding a node type changes the browser runtime/ABI, not the HTTP service.\n\nThe module must have **no WASM imports** and export:\n\n- `memory`;\n- `ui_ptr() -> i32`, `ui_len() -> i32` — pointer and byte length of the current UTF-8 JSON UI tree;\n- `alloc(length: i32) -> i32` — pointer to writable memory for an event;\n- `handle_event(eventPtr: i32, eventLen: i32) -> void` — process one host event and update module state;\n- `is_complete() -> i32` — return nonzero when the interaction is complete;\n- `result_ptr() -> i32`, `result_len() -> i32` — pointer and byte length of the final UTF-8 JSON result.\n\nThe host reads the initial tree, renders it, and after each event calls `handle_event` and reads the updated tree. When `is_complete()` becomes nonzero, the host reads the result and posts it to the existing interaction endpoint. The module defines its own confirmation flow; there is no built-in form or host-owned submit button.\n\nA UI tree has `version: 1`, a `title`, and a `root` node:\n\n```json\n{\n  \"version\": 1,\n  \"title\": \"Choose one card\",\n  \"root\": {\n    \"type\": \"column\",\n    \"children\": [\n      { \"type\": \"text\", \"value\": \"Choose a card and confirm your selection.\" },\n      {\n        \"type\": \"row\",\n        \"children\": [\n          {\n            \"type\": \"button\",\n            \"id\": \"ace\",\n            \"label\": \"Ace of Spades\",\n            \"selected\": false,\n            \"hover\": true,\n            \"children\": [\n              {\n                \"type\": \"svg\",\n                \"viewBox\": \"0 0 100 140\",\n                \"children\": [\n                  { \"type\": \"rect\", \"x\": 2, \"y\": 2, \"width\": 96, \"height\": 136, \"rx\": 8, \"fill\": \"white\", \"stroke\": \"#333333\" },\n                  { \"type\": \"svgText\", \"x\": 50, \"y\": 75, \"fontSize\": 32, \"anchor\": \"middle\", \"value\": \"A\" }\n                ]\n              }\n            ]\n          }\n        ]\n      },\n      { \"type\": \"checkbox\", \"id\": \"confirm\", \"label\": \"I confirm\", \"checked\": false }\n    ]\n  }\n}\n```\n\nSupported nodes are `row`, `column`, `text`, `checkbox`, `button`, `svg`, `g`, `rect`, `circle`, `ellipse`, `line`, `path`, and `svgText`. Layout nodes group children; SVG nodes are only valid within an SVG subtree. Checkbox nodes have `id`, `label`, and `checked`. Buttons have `id`, accessible `label`, optional `selected`/`disabled`, optional `hover: true` to receive pointer enter/leave events, and child nodes. Use unique IDs on interactive nodes. Text is inserted as text, not interpreted as HTML. SVG is built element-by-element with allow-listed numeric geometry, path data, `viewBox`, text anchor, and simple color values for `fill`/`stroke`; scripts, arbitrary attributes, external URLs, CSS, and event handlers are not accepted.\n\nThe host sends events such as `{\"type\":\"click\",\"target\":\"ace\"}`, `{\"type\":\"change\",\"target\":\"confirm\",\"checked\":true}`, `{\"type\":\"pointerenter\",\"target\":\"ace\"}`, and `{\"type\":\"pointerleave\",\"target\":\"ace\"}`. Pointer enter/leave events are enabled on a button by setting `\"hover\": true`. After processing an event, return the current tree from `ui_ptr`/`ui_len`; this lets the module update selection state, labels, SVG attributes, or available controls. On completion return a JSON result such as `{\"selectedCard\":\"ace-spades\"}`. Raw/high-frequency mousemove events are not currently sent.\n\nFor the complete list of node properties, SVG primitives, and event payloads, retrieve `/wasm_interop.md`; do not assume an event or SVG feature is supported just because it exists in the browser platform.\n\n### WASM implementation recommendations\n\n- Use a WASM-targeting toolchain such as C/C++ with `wasm32-unknown-unknown` and no WASI.\n- Keep the module self-contained; do not import host functions or assume access to the DOM, network, filesystem, JavaScript, or WASI.\n- Validate event IDs and event values inside the module. The host's allow-list and size checks are not a substitute for validating module state.\n- Keep initialization and event handling fast. The host executes the module in a Web Worker and terminates a task that exceeds the five-second execution limit.\n\nThe current Web UI limits a tree to 64 KB, 512 nodes, and a depth of 24; a module is limited to 4 MB and an interaction result to 64 KB. Web Workers, the no-import rule, and these limits are not a complete security or memory sandbox. Treat agent-provided WASM as untrusted code.\n\n## Waiting for an interaction\n\nCall:\n\n```http\nGET /api/interactions/{interactionId}/result\n```\n\nThe request waits until the user completes the task or it is cancelled. A successful completion has the form:\n\n```json\n{\n  \"id\": \"interaction-id\",\n  \"status\": \"completed\",\n  \"result\": { \"selectedCards\": [\"ace-spades\", \"king-hearts\", \"queen-diamonds\"] },\n  \"completedAt\": \"2026-10-20T12:00:00+00:00\"\n}\n```\n\nOther terminal statuses are `cancelled` and `failed`. A failed interaction includes an error object in `result`. `404` means that the interaction ID does not exist. Results are limited to 64 KB. If the HTTP connection drops before a response arrives, repeat the GET with the same ID; a pending interaction remains pending across service restarts.\n\nIf the requested outcome is to show or interpret the user's choice in the conversation, do not treat a pending response as the final answer. Keep waiting in the current task and report the result only after the GET returns a terminal status.\n\n## Other HTTP endpoints\n\n- `GET /api/sessions` — list open sessions and summary information.\n- `GET /api/sessions/{sessionId}` — get a session's current view and interaction records.\n- `DELETE /api/sessions/{sessionId}` — close a session, delete its data, and cancel pending interactions.\n- `GET /openapi.json` — machine-readable API description. This OpenAPI document embeds this entire skill document as `info.description` and `x-agent-skill`.\n- `GET /skill.md` — this skill document as Markdown.\n- `GET /wasm_interop.md` — detailed, versioned reference for the WASM UI ABI, SVG node vocabulary, events, examples, and limits.\n\n## Errors and limits\n\nSession and interaction IDs must contain 1-80 letters, digits, underscores, or hyphens. The server rejects invalid content, grid positions outside the declared grid, unsupported content types, malformed base64, and oversized bodies with a `400` response. `409` on result submission means the interaction is missing or is no longer pending; `404` on session or interaction retrieval means it does not exist.\n\nThe service allows an HTTP request body up to 32 MB. Individual content and result limits above still apply. Calls use standard HTTP semantics and JSON; no authentication headers are expected in this single-user prototype.\n"
+  },
+  "servers": [
+    {
+      "url": "/",
+      "description": "Current Jumprope service origin"
+    }
+  ],
+  "paths": {
+    "/api/sessions": {
+      "get": {
+        "operationId": "listSessions",
+        "summary": "List active sessions",
+        "description": "Returns a summary of all open sessions. Use ordinary HTTP; agent clients do not need SignalR or WebSockets.",
+        "responses": {
+          "200": {
+            "description": "Active sessions.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SessionSummary"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/sessions/{sessionId}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/SessionId"
+        }
+      ],
+      "get": {
+        "operationId": "getSession",
+        "summary": "Get a session",
+        "description": "Returns its current grid view and interaction records.",
+        "responses": {
+          "200": {
+            "description": "The session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Session"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteSession",
+        "summary": "Close and delete a session",
+        "description": "Deletes the session and cancels its pending interactions. Waiting result requests receive status cancelled.",
+        "responses": {
+          "204": {
+            "description": "Session deleted."
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/sessions/{sessionId}/view": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/SessionId"
+        }
+      ],
+      "put": {
+        "operationId": "replaceSessionView",
+        "summary": "Replace a session view",
+        "description": "Replaces the complete view. Any pending interactions from the previous view are cancelled. WASM elements receive generated interaction IDs in the response.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ViewInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The stored view, including generated interaction IDs.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Session"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
+        }
+      }
+    },
+    "/api/interactions/{interactionId}/result": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/InteractionId"
+        }
+      ],
+      "get": {
+        "operationId": "waitForInteractionResult",
+        "summary": "Wait for an interaction result",
+        "description": "Long-polls over a normal HTTP request until the user completes or cancels the interaction. Reconnect using the same ID if the HTTP connection is interrupted.",
+        "responses": {
+          "200": {
+            "description": "The completed, cancelled, or failed interaction.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InteractionResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      },
+      "post": {
+        "operationId": "submitInteractionResult",
+        "summary": "Submit a completed interaction result",
+        "description": "Normally called by the browser UI, not by the agent. Results are limited to 64 KB.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": [
+                  "object",
+                  "array",
+                  "string",
+                  "number",
+                  "integer",
+                  "boolean",
+                  "null"
+                ],
+                "additionalProperties": true
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The completed interaction.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InteractionResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
+      }
+    },
+    "/api/interactions/{interactionId}/failure": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/InteractionId"
+        }
+      ],
+      "post": {
+        "operationId": "reportInteractionFailure",
+        "summary": "Report a failed interaction",
+        "description": "Normally called by the browser UI if the WASM module fails.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InteractionFailure"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The failed interaction.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InteractionResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
+      }
+    },
+    "/openapi.json": {
+      "get": {
+        "operationId": "getOpenApiDocument",
+        "summary": "Get this API description and embedded agent skill",
+        "responses": {
+          "200": {
+            "description": "OpenAPI 3.1 document with the complete skill in info.description and info.x-agent-skill.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/skill.md": {
+      "get": {
+        "operationId": "getAgentSkill",
+        "summary": "Get the agent skill as Markdown",
+        "responses": {
+          "200": {
+            "description": "Agent instructions for using the Jumprope HTTP API.",
+            "content": {
+              "text/markdown": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/wasm_interop.md": {
+      "get": {
+        "operationId": "getWasmInteropReference",
+        "summary": "Get the detailed WASM UI interoperability reference",
+        "responses": {
+          "200": {
+            "description": "Current WASM UI ABI, node, event, and safety reference.",
+            "content": {
+              "text/markdown": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "parameters": {
+      "SessionId": {
+        "name": "sessionId",
+        "in": "path",
+        "required": true,
+        "description": "1-80 letters, digits, underscores, or hyphens.",
+        "schema": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{1,80}$"
+        }
+      },
+      "InteractionId": {
+        "name": "interactionId",
+        "in": "path",
+        "required": true,
+        "description": "Interaction ID returned for a WASM element when replacing a session view.",
+        "schema": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{1,80}$"
+        }
+      }
+    },
+    "responses": {
+      "BadRequest": {
+        "description": "Invalid ID, body, grid layout, content, or request size.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ApiError"
+            }
+          }
+        }
+      },
+      "NotFound": {
+        "description": "The requested session or interaction does not exist."
+      },
+      "Conflict": {
+        "description": "The interaction does not exist or is no longer pending.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ApiError"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "ApiError": {
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "string"
+          }
+        }
+      },
+      "InteractionFailure": {
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096
+          }
+        }
+      },
+      "ElementInput": {
+        "type": "object",
+        "required": [
+          "id",
+          "type",
+          "row",
+          "column",
+          "rowSpan",
+          "columnSpan"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,80}$"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "markdown",
+              "image",
+              "wasm"
+            ]
+          },
+          "row": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "column": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "rowSpan": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "columnSpan": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 1000000,
+            "description": "Markdown text. Only valid for type markdown."
+          },
+          "dataBase64": {
+            "type": "string",
+            "contentEncoding": "base64",
+            "description": "Image data (up to 8 MB decoded) or WASM bytes (up to 4 MB decoded)."
+          },
+          "contentType": {
+            "type": "string",
+            "enum": [
+              "image/png",
+              "image/jpeg",
+              "image/gif",
+              "image/webp",
+              "application/wasm"
+            ]
+          },
+          "interactionId": {
+            "type": "string",
+            "readOnly": true,
+            "description": "Generated by the service for WASM elements."
+          }
+        }
+      },
+      "ViewInput": {
+        "type": "object",
+        "required": [
+          "rowsCount",
+          "columnsCount",
+          "elements"
+        ],
+        "properties": {
+          "rowsCount": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 32
+          },
+          "columnsCount": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 32
+          },
+          "elements": {
+            "type": "array",
+            "maxItems": 128,
+            "items": {
+              "$ref": "#/components/schemas/ElementInput"
+            }
+          }
+        }
+      },
+      "StoredElement": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ElementInput"
+          }
+        ]
+      },
+      "Interaction": {
+        "type": "object",
+        "required": [
+          "id",
+          "elementId",
+          "status",
+          "createdAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "elementId": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "completed",
+              "cancelled",
+              "failed"
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "completedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "result": {
+            "type": [
+              "object",
+              "array",
+              "string",
+              "number",
+              "integer",
+              "boolean",
+              "null"
+            ],
+            "description": "JSON result, or an error object for failed interactions."
+          }
+        }
+      },
+      "InteractionResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "status"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "completed",
+              "cancelled",
+              "failed"
+            ]
+          },
+          "result": {
+            "type": [
+              "object",
+              "array",
+              "string",
+              "number",
+              "integer",
+              "boolean",
+              "null"
+            ]
+          },
+          "completedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        }
+      },
+      "SessionSummaryElement": {
+        "type": "object",
+        "required": [
+          "id",
+          "type"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          },
+          "interactionId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "interactionStatus": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "SessionSummary": {
+        "type": "object",
+        "required": [
+          "sessionId",
+          "updatedAt",
+          "rowsCount",
+          "columnsCount",
+          "elements"
+        ],
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "rowsCount": {
+            "type": "integer"
+          },
+          "columnsCount": {
+            "type": "integer"
+          },
+          "elements": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SessionSummaryElement"
+            }
+          }
+        }
+      },
+      "Session": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/SessionSummary"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "elements": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/StoredElement"
+                }
+              },
+              "interactions": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Interaction"
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  }
+}

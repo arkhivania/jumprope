@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Jumprope</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <p class="eyebrow">Agent workspace</p>
+      <h1>Jumprope</h1>
+    </div>
+    <span id="connection-state" class="connection-state">Connecting…</span>
+  </header>
+  <main>
+    <nav id="session-tabs" class="session-tabs" aria-label="Sessions"></nav>
+    <section id="empty-state" class="empty-state">
+      <h2>Waiting for a session</h2>
+      <p>When an agent sends a view, it will appear here as a session tab.</p>
+    </section>
+    <section id="session-view" class="session-view" hidden>
+      <div id="session-grid" class="session-grid"></div>
+    </section>
+  </main>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script src="/app.js"></script>
+</body>
+</html>
